@@ -10,8 +10,8 @@
 #              r'/work/imvia/ra7916lu/illumi-net/data/retrato_de_lola_flores/dome/2024_02_22_2_5/images/Face_A/rti'
 #             ]
 
-ACQ_PATH = r'/work/imvia/ra7916lu/rti/data/buddhaPNG'
-SAVE_PATH = r'/work/imvia/ra7916lu/rti/data/buddhaPNG/relight/dmd'
+ACQ_PATH = r'data/painting2/images/Face_A/rti_sub_images'
+SAVE_PATH = r'data/painting2/relight/hsh'
 
 
              

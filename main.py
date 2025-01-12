@@ -5,7 +5,6 @@ from utils import dataset
 from utils import params
 import numpy as np
 
-from overlap_analysis_utils import apply_overlap_analysis
 
 data_ = dataset(params.ACQ_PATH)
 
@@ -27,15 +26,15 @@ print("Shape of LPs cartesians: ", lps_cartesian.shape)
 #                            save_paths=save_paths)
 
 # For HSH
-# hsh = HSHModel()
-# coeffs = hsh.model_fit(lps_cartesian=lps_cartesian, target_images=target_images)
-# relit_images = hsh.relight(lps_cartesian=lps_cartesian, 
-#                            target_images=target_images, 
-#                            save_paths=save_paths)
-
-# For DMD
-dmd = DMDModel()
-coeffs = dmd.model_fit(lps_cartesian=lps_cartesian, target_images=target_images)
-relit_images = dmd.relight(lps_cartesian=lps_cartesian,
+hsh = HSHModel()
+coeffs = hsh.model_fit(lps_cartesian=lps_cartesian, target_images=target_images)
+relit_images = hsh.relight(lps_cartesian=lps_cartesian, 
                            target_images=target_images, 
                            save_paths=save_paths)
+
+# For DMD
+# dmd = DMDModel()
+# coeffs = dmd.model_fit(lps_cartesian=lps_cartesian, target_images=target_images)
+# relit_images = dmd.relight(lps_cartesian=lps_cartesian,
+#                            target_images=target_images, 
+#                            save_paths=save_paths)
