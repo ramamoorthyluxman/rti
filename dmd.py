@@ -21,25 +21,24 @@ class DMDModel:
         self.C = None
         self.light_weights = None
 
-    def _normalize_light_dirs(self, azimuths, elevations):
-        """Convert light directions to normalized 3D vectors"""
-        # Convert to radians
-        azimuths = np.deg2rad(azimuths)
-        elevations = np.deg2rad(elevations)
-        
-        # Convert to Cartesian coordinates (x, y, z)
-        x = np.cos(elevations) * np.cos(azimuths)
-        y = np.cos(elevations) * np.sin(azimuths)
-        z = np.sin(elevations)
-        
-        # Stack into array of 3D vectors
-        light_dirs = np.stack([x, y, z], axis=1)
-        
-        return light_dirs
-
-    def model_fit(self, azimuths, elevations, target_images):
+    def _normalize_light_vectors(self, lps_cartesian):
         """
-        Fit DMD model to the captured data.
+        Normalize the input light position vectors.
+        Args:
+            lps_cartesian: numpy array of shape (N, 3) containing x, y, z coordinates
+        Returns:
+            normalized vectors of shape (N, 3)
+        """
+        norms = np.sqrt(np.sum(lps_cartesian**2, axis=1))
+        return lps_cartesian / norms[:, np.newaxis]
+
+    def model_fit(self, lps_cartesian, target_images):
+        """
+        Fit DMD model to the captured data using Cartesian light positions.
+        Args:
+            lps_cartesian: numpy array of shape (N, 3) containing x, y, z coordinates
+                          of light positions
+            target_images: numpy array of shape (N, H, W, C) containing target images
         """
         N, H, W, C = target_images.shape
         self.H, self.W, self.C = H, W, C
@@ -47,8 +46,8 @@ class DMDModel:
         # Normalize target images to [0,1]
         target_images = target_images.astype(np.float32) / 255.0
         
-        # Normalize light directions
-        light_dirs = self._normalize_light_dirs(azimuths, elevations)  # (N, 3)
+        # Normalize light vectors
+        light_dirs = self._normalize_light_vectors(lps_cartesian)  # (N, 3)
         
         # Fit each color channel separately
         self.components = np.zeros((self.n_components, H, W, C))
@@ -71,7 +70,7 @@ class DMDModel:
             
             # Compute weights relating light directions to components
             # Using least squares to find relationship between light directions and component activations
-            weights, *_ = lstsq(light_dirs, U[:, :self.n_components])
+            weights = lstsq(light_dirs, U[:, :self.n_components])[0]
             
             # Store results for this channel
             self.components[:, :, :, c] = components.reshape(self.n_components, H, W)
@@ -82,23 +81,29 @@ class DMDModel:
         
         return self.components, self.mean, self.light_weights
 
-    def relight(self, azimuths, elevations, save_paths, target_images=None):
+    def relight(self, lps_cartesian, save_paths, target_images=None):
         """
         Relight using the fitted DMD model and save images with enhanced comparison plots.
+        Args:
+            lps_cartesian: numpy array of shape (M, 3) containing x, y, z coordinates
+                          of light positions for relighting
+            save_paths: list of M paths where to save the relit images
+            target_images: optional numpy array of shape (M, H, W, C) containing 
+                          ground truth images for comparison
         """
         if self.components is None or self.mean is None or self.light_weights is None:
             raise ValueError("Model must be fitted first")
         
-        if len(save_paths) != len(azimuths):
-            raise ValueError("Number of save paths must match number of light directions")
+        if len(save_paths) != len(lps_cartesian):
+            raise ValueError("Number of save paths must match number of light positions")
         
         # Create comparison directory
         comparison_dir = os.path.join(os.path.dirname(save_paths[0]), "comparison")
         os.makedirs(comparison_dir, exist_ok=True)
             
-        # Convert new light directions to normalized vectors
-        light_dirs = self._normalize_light_dirs(azimuths, elevations)  # (M, 3)
-        M = len(azimuths)
+        # Normalize new light vectors
+        light_dirs = self._normalize_light_vectors(lps_cartesian)  # (M, 3)
+        M = len(lps_cartesian)
         
         # Initialize output array
         relit = np.zeros((M, self.H, self.W, self.C))
@@ -192,8 +197,9 @@ class DMDModel:
                 plt.axis('off')
                 plt.title('Quality Metrics')
                 
-                # Overall title with light direction info
-                plt.suptitle(f'Comparison Analysis (Az: {azimuths[i]:.1f}°, El: {elevations[i]:.1f}°)', fontsize=14)
+                # Overall title with light position info
+                plt.suptitle(f'Comparison Analysis (x: {lps_cartesian[i,0]:.2f}, y: {lps_cartesian[i,1]:.2f}, z: {lps_cartesian[i,2]:.2f})', 
+                           fontsize=14)
                 
                 # Adjust layout and save
                 plt.tight_layout(rect=[0, 0.03, 1, 0.95])
@@ -201,56 +207,58 @@ class DMDModel:
                 plt.savefig(comparison_path, bbox_inches='tight', dpi=150)
                 plt.close()
         
-        # Create summary plot of metrics across all images
-        plt.figure(figsize=(15, 5))
+        if target_images is not None:
+            # Create summary plot of metrics across all images
+            plt.figure(figsize=(15, 5))
 
-        # MSE plot
-        plt.subplot(1, 3, 1)
-        plt.plot(mse_values, label='MSE')
-        mean_mse = np.mean(mse_values)
-        plt.axhline(y=mean_mse, color='r', linestyle='--', label=f'Mean MSE: {mean_mse:.2f}')
-        plt.title('MSE across Images')
-        plt.xlabel('Image Index')
-        plt.ylabel('MSE')
-        plt.grid(True)
-        plt.legend()
+            # MSE plot
+            plt.subplot(1, 3, 1)
+            plt.plot(mse_values, label='MSE')
+            mean_mse = np.mean(mse_values)
+            plt.axhline(y=mean_mse, color='r', linestyle='--', label=f'Mean MSE: {mean_mse:.2f}')
+            plt.title('MSE across Images')
+            plt.xlabel('Image Index')
+            plt.ylabel('MSE')
+            plt.grid(True)
+            plt.legend()
 
-        # PSNR plot
-        plt.subplot(1, 3, 2)
-        plt.plot(psnr_values, label='PSNR')
-        mean_psnr = np.mean(psnr_values)
-        plt.axhline(y=mean_psnr, color='r', linestyle='--', label=f'Mean PSNR: {mean_psnr:.2f}')
-        plt.title('PSNR across Images')
-        plt.xlabel('Image Index')
-        plt.ylabel('PSNR (dB)')
-        plt.grid(True)
-        plt.legend()
+            # PSNR plot
+            plt.subplot(1, 3, 2)
+            plt.plot(psnr_values, label='PSNR')
+            mean_psnr = np.mean(psnr_values)
+            plt.axhline(y=mean_psnr, color='r', linestyle='--', label=f'Mean PSNR: {mean_psnr:.2f}')
+            plt.title('PSNR across Images')
+            plt.xlabel('Image Index')
+            plt.ylabel('PSNR (dB)')
+            plt.grid(True)
+            plt.legend()
 
-        # SSIM plot
-        plt.subplot(1, 3, 3)
-        plt.plot(ssim_values, label='SSIM')
-        mean_ssim = np.mean(ssim_values)
-        plt.axhline(y=mean_ssim, color='r', linestyle='--', label=f'Mean SSIM: {mean_ssim:.4f}')
-        plt.title('SSIM across Images')
-        plt.xlabel('Image Index')
-        plt.ylabel('SSIM')
-        plt.grid(True)
-        plt.legend()
+            # SSIM plot
+            plt.subplot(1, 3, 3)
+            plt.plot(ssim_values, label='SSIM')
+            mean_ssim = np.mean(ssim_values)
+            plt.axhline(y=mean_ssim, color='r', linestyle='--', label=f'Mean SSIM: {mean_ssim:.4f}')
+            plt.title('SSIM across Images')
+            plt.xlabel('Image Index')
+            plt.ylabel('SSIM')
+            plt.grid(True)
+            plt.legend()
 
-        plt.tight_layout()
-        summary_path = os.path.join(comparison_dir, 'metrics_summary.png')
-        plt.savefig(summary_path, bbox_inches='tight', dpi=150)
-        plt.close()
+            plt.tight_layout()
+            summary_path = os.path.join(comparison_dir, 'metrics_summary.png')
+            plt.savefig(summary_path, bbox_inches='tight', dpi=150)
+            plt.close()
         
-        # Save metrics to CSV
-        metrics_df = pd.DataFrame({
-            'Image_Index': range(len(save_paths)),
-            'Azimuth': azimuths,
-            'Elevation': elevations,
-            'MSE': mse_values,
-            'PSNR': psnr_values,
-            'SSIM': ssim_values
-        })
-        metrics_df.to_csv(os.path.join(comparison_dir, 'metrics.csv'), index=False)
+            # Save metrics to CSV
+            metrics_df = pd.DataFrame({
+                'Image_Index': range(len(save_paths)),
+                'X': lps_cartesian[:, 0],
+                'Y': lps_cartesian[:, 1],
+                'Z': lps_cartesian[:, 2],
+                'MSE': mse_values,
+                'PSNR': psnr_values,
+                'SSIM': ssim_values
+            })
+            metrics_df.to_csv(os.path.join(comparison_dir, 'metrics.csv'), index=False)
         
         return relit

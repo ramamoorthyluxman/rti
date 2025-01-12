@@ -14,21 +14,22 @@ class PTMModel:
         self.W = None
         self.C = None
 
-    def _compute_ptm_basis(self, azimuths, elevations):
+    def _compute_ptm_basis(self, lps_cartesian):
         """
-        Compute PTM basis for given light directions.
-        Uses normalized light vectors instead of raw angles.
+        Compute PTM basis for given light positions in Cartesian coordinates.
+        
+        Args:
+            lps_cartesian: numpy array of shape (N, 3) containing x, y, z coordinates
+                          of light positions
+        Returns:
+            basis: numpy array of shape (N, 6) containing PTM basis functions
         """
-        # Convert to radians
-        azimuths = np.deg2rad(azimuths)
-        elevations = np.deg2rad(elevations)
+        # Extract normalized x, y components
+        lx = lps_cartesian[:, 0]
+        ly = lps_cartesian[:, 1]
+        lz = lps_cartesian[:, 2]
         
-        # Compute normalized light vector components
-        lx = np.cos(elevations) * np.cos(azimuths)
-        ly = np.cos(elevations) * np.sin(azimuths)
-        lz = np.sin(elevations)
-        
-        # Normalize each light vector
+        # Normalize the light vectors if they aren't already
         norms = np.sqrt(lx**2 + ly**2 + lz**2)
         lx = lx / norms
         ly = ly / norms
@@ -46,9 +47,14 @@ class PTMModel:
         
         return basis
 
-    def model_fit(self, azimuths, elevations, target_images):
+    def model_fit(self, lps_cartesian, target_images):
         """
-        Fit PTM model to the captured data.
+        Fit PTM model to the captured data using Cartesian light positions.
+        
+        Args:
+            lps_cartesian: numpy array of shape (N, 3) containing x, y, z coordinates
+                          of light positions
+            target_images: numpy array of shape (N, H, W, C) containing target images
         """
         N, H, W, C = target_images.shape
         self.H, self.W, self.C = H, W, C
@@ -57,7 +63,7 @@ class PTMModel:
         target_images = target_images.astype(np.float32) / 255.0
         
         # Compute PTM basis
-        basis = self._compute_ptm_basis(azimuths, elevations)  # (N, 6)
+        basis = self._compute_ptm_basis(lps_cartesian)  # (N, 6)
         
         # Solve for each color channel separately to improve numerical stability
         coefficients = np.zeros((6, H, W, C))
@@ -67,7 +73,8 @@ class PTMModel:
             Y = target_images[..., c].reshape(N, -1)  # (N, H*W)
             
             # Solve least squares system
-            channel_coeffs, *_ = lstsq(basis, Y)  # (6, H*W)
+            lstsq_result = lstsq(basis, Y)  # (6, H*W)
+            channel_coeffs = lstsq_result[0]  # Get just the coefficients
             coefficients[..., c] = channel_coeffs.reshape(6, H, W)
         
         self.coefficients = coefficients
@@ -75,23 +82,30 @@ class PTMModel:
         
         return self.coefficients
 
-    def relight(self, azimuths, elevations, save_paths, target_images=None):
+    def relight(self, lps_cartesian, save_paths, target_images=None):
         """
         Relight using the fitted PTM model and save images with enhanced comparison plots.
+        
+        Args:
+            lps_cartesian: numpy array of shape (M, 3) containing x, y, z coordinates
+                          of light positions for relighting
+            save_paths: list of M paths where to save the relit images
+            target_images: optional numpy array of shape (M, H, W, C) containing 
+                          ground truth images for comparison
         """
         if self.coefficients is None:
             raise ValueError("Model must be fitted first")
         
-        if len(save_paths) != len(azimuths):
-            raise ValueError("Number of save paths must match number of light directions")
+        if len(save_paths) != len(lps_cartesian):
+            raise ValueError("Number of save paths must match number of light positions")
         
         # Create comparison directory
         comparison_dir = os.path.join(os.path.dirname(save_paths[0]), "comparison")
         os.makedirs(comparison_dir, exist_ok=True)
             
-        # Compute basis for new light directions
-        basis = self._compute_ptm_basis(azimuths, elevations)
-        M = len(azimuths)
+        # Compute basis for new light positions
+        basis = self._compute_ptm_basis(lps_cartesian)
+        M = len(lps_cartesian)
         
         # Initialize output array
         relit = np.zeros((M, self.H, self.W, self.C))
@@ -180,8 +194,9 @@ class PTMModel:
                 plt.axis('off')
                 plt.title('Quality Metrics')
                 
-                # Overall title with light direction info
-                plt.suptitle(f'Comparison Analysis (Az: {azimuths[i]:.1f}°, El: {elevations[i]:.1f}°)', fontsize=14)
+                # Overall title with light position info
+                plt.suptitle(f'Comparison Analysis (x: {lps_cartesian[i,0]:.2f}, y: {lps_cartesian[i,1]:.2f}, z: {lps_cartesian[i,2]:.2f})', 
+                           fontsize=14)
                 
                 # Adjust layout and save
                 plt.tight_layout(rect=[0, 0.03, 1, 0.95])
@@ -189,43 +204,44 @@ class PTMModel:
                 plt.savefig(comparison_path, bbox_inches='tight', dpi=150)
                 plt.close()
         
-        # Create summary plot of metrics across all images
-        plt.figure(figsize=(15, 5))
+        if target_images is not None:
+            # Create summary plot of metrics across all images
+            plt.figure(figsize=(15, 5))
 
-        # MSE plot
-        plt.subplot(1, 3, 1)
-        plt.plot(mse_values, label='MSE')
-        mean_mse = np.mean(mse_values)
-        plt.axhline(y=mean_mse, color='r', linestyle='--', label=f'Mean MSE: {mean_mse:.2f}')
-        plt.title('MSE across Images')
-        plt.xlabel('Image Index')
-        plt.ylabel('MSE')
-        plt.grid(True)
-        plt.legend()
+            # MSE plot
+            plt.subplot(1, 3, 1)
+            plt.plot(mse_values, label='MSE')
+            mean_mse = np.mean(mse_values)
+            plt.axhline(y=mean_mse, color='r', linestyle='--', label=f'Mean MSE: {mean_mse:.2f}')
+            plt.title('MSE across Images')
+            plt.xlabel('Image Index')
+            plt.ylabel('MSE')
+            plt.grid(True)
+            plt.legend()
 
-        # PSNR plot
-        plt.subplot(1, 3, 2)
-        plt.plot(psnr_values, label='PSNR')
-        mean_psnr = np.mean(psnr_values)
-        plt.axhline(y=mean_psnr, color='r', linestyle='--', label=f'Mean PSNR: {mean_psnr:.2f}')
-        plt.title('PSNR across Images')
-        plt.xlabel('Image Index')
-        plt.ylabel('PSNR (dB)')
-        plt.grid(True)
-        plt.legend()
+            # PSNR plot
+            plt.subplot(1, 3, 2)
+            plt.plot(psnr_values, label='PSNR')
+            mean_psnr = np.mean(psnr_values)
+            plt.axhline(y=mean_psnr, color='r', linestyle='--', label=f'Mean PSNR: {mean_psnr:.2f}')
+            plt.title('PSNR across Images')
+            plt.xlabel('Image Index')
+            plt.ylabel('PSNR (dB)')
+            plt.grid(True)
+            plt.legend()
 
-        # SSIM plot
-        plt.subplot(1, 3, 3)
-        plt.plot(ssim_values, label='SSIM')
-        mean_ssim = np.mean(ssim_values)
-        plt.axhline(y=mean_ssim, color='r', linestyle='--', label=f'Mean SSIM: {mean_ssim:.4f}')
-        plt.title('SSIM across Images')
-        plt.xlabel('Image Index')
-        plt.ylabel('SSIM')
-        plt.grid(True)
-        plt.legend()
+            # SSIM plot
+            plt.subplot(1, 3, 3)
+            plt.plot(ssim_values, label='SSIM')
+            mean_ssim = np.mean(ssim_values)
+            plt.axhline(y=mean_ssim, color='r', linestyle='--', label=f'Mean SSIM: {mean_ssim:.4f}')
+            plt.title('SSIM across Images')
+            plt.xlabel('Image Index')
+            plt.ylabel('SSIM')
+            plt.grid(True)
+            plt.legend()
 
-        plt.tight_layout()
-        summary_path = os.path.join(comparison_dir, 'metrics_summary.png')
-        plt.savefig(summary_path, bbox_inches='tight', dpi=150)
-        plt.close()
+            plt.tight_layout()
+            summary_path = os.path.join(comparison_dir, 'metrics_summary.png')
+            plt.savefig(summary_path, bbox_inches='tight', dpi=150)
+            plt.close()
